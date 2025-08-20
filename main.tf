@@ -83,28 +83,30 @@ resource "google_container_cluster" "trustnote_gke" {
     name = "trustnote-gke"
     location = var.gcp_region
 
-    networking_mode = "VPC_NATIVE"
-    network = google_compute_network.trustnote_vpc.name
+    # networking_mode = "VPC_NATIVE"
+    # network = google_compute_network.trustnote_vpc.name
 
-    remove_default_node_pool = true
-    initial_node_count = 1
+    # remove_default_node_pool = true
+    # initial_node_count = 1
+    enable_autopilot = true
+    network          = google_compute_network.trustnote_vpc.name
 }
 
-resource "google_container_node_pool" "trustnote_primary_nodes" {
-  name = "trustnote-default-pool"
-  cluster = google_container_cluster.trustnote_gke.name
-  location = var.gcp_region
+# resource "google_container_node_pool" "trustnote_primary_nodes" {
+#   name = "trustnote-default-pool"
+#   cluster = google_container_cluster.trustnote_gke.name
+#   location = var.gcp_region
 
-# Assigns each worker node size
-  node_config {
-    machine_type = "e2-micro" # 0.25 vCPU, 1 GB RAM
-    disk_size_gb = 10
-    disk_type = "pd-standard" # HDD - "pd-ssd"
-    oauth_scopes = [
-        "https://www.googleapis.com/auth/cloud-platform"
-    ]
-  }
+# # Assigns each worker node size
+#   node_config {
+#     machine_type = "e2-micro" # 0.25 vCPU, 1 GB RAM
+#     disk_size_gb = 10
+#     disk_type = "pd-standard" # HDD - "pd-ssd"
+#     oauth_scopes = [
+#         "https://www.googleapis.com/auth/cloud-platform"
+#     ]
+#   }
 
-# Number of worker nodes
-  initial_node_count = 2
-}
+# # Number of worker nodes
+#   initial_node_count = 1
+# }
