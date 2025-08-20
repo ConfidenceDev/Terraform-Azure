@@ -1,147 +1,110 @@
-terraform {
-  required_providers {
-    azurerm = {
-      source  = "hashicorp/azurerm"
-      version = "=3.0.0"
-    }
-  }
-}
+# Provider and Resource
+# Key Vault
+# VM, Network and SubNets
 
-provider "azurerm" {
-  features {}
-}
-
-resource "azurerm_resource_group" "learn-rg" {
-  name     = "learn-rg"
-  location = "West Europe"
-  tags = {
-    environment = "dev"
-  }
-}
-
-resource "azurerm_virtual_network" "learn-vn" {
-  name                = "learn-vn"
-  resource_group_name = azurerm_resource_group.example.name
-  location            = azurerm_resource_group.example.location
-  address_space       = ["10.0.0.0/16"]
-  tags = {
-    environment = "dev"
-  }
-}
-
-resource "azurerm_subnet" "learn-subnet" {
-  name                 = "learn-subnet"
-  resource_group_name  = azurerm_resource_group.learn-rg.name
-  virtual_network_name = azurerm_virtual_network.learn-vn.name
-  address_prefixes     = ["10.0.1.0/24"]
-}
-
-resource "azurerm_network_security_group" "learn-sg" {
-  name                = "learn-sg"
-  location            = azurerm_resource_group.learn-rg.location
-  resource_group_name = azurerm_resource_group.learn-rg.name
-  tags = {
-      environment = "dev"
+# Secret Manager - To store all required K8S env ===================
+resource "google_secret_manager_secret" "trustnote_res" {
+    for_each = var.k8s_secrets
+    
+    # Use Key as Name in GCP
+    secret_id = each.key
+    replication {
+      auto {}
     }
 }
 
-resource "azurerm_network_security_rule" "learn-dev-rule" {
-  name                        = "learn-dev-rule"
-  priority                    = 100
-  direction                   = "Inbound"
-  access                      = "Allow"
-  protocol                    = "*" //TCP
-  source_port_range           = "*"
-  destination_port_range      = "*"
-  source_address_prefix       = "*" // Your IP Address
-  destination_address_prefix  = "*"
-  resource_group_name         = azurerm_resource_group.learn-rg.name
-  network_security_group_name = azurerm_network_security_group.learn-sg.name
+# Secret Manager - Entries
+resource "google_secret_manager_secret_version" "trustnote_res_version" {
+    for_each = var.k8s_secrets
+    
+    secret =  google_secret_manager_secret.trustnote_res[each.key].id
+    secret_data = each.value
 }
 
-resource "azurerm_subnet_network_security_group_association" "learn-sga" {
-  subnet_id                 = azurerm_subnet.learn-subnet.id
-  network_security_group_id = azurerm_network_security_group.learn-sg.id
+# Networking (VPC, Subnet and Firewall) - VM + GKE ===================
+resource "google_compute_network" "trustnote_vpc" {
+  name = "trustnote-vpc"
+  auto_create_subnetworks = true
 }
 
-resource "azurerm_public_ip" "learn-ip" {
-  name                = "learn-ip"
-  resource_group_name = azurerm_resource_group.learn-rg.name
-  location            = azurerm_resource_group.learn-rg.location
-  allocation_method   = "Dynamic"
+resource "google_compute_firewall" "trustnote_http_ssh" {
+  name = "trustnote-http-ssh"
+  network = google_compute_network.trustnote_vpc.name
 
-  tags = {
-    environment = "dev"
+# Ports - For SSH, HTTP and Jenkins
+  allow {
+    protocol = "tcp"
+    ports = ["22", "80", "8080"]
   }
+
+# Allow access form anywhere
+  source_ranges = ["0.0.0.0/0"]
 }
 
-resource "azurerm_network_interface" "learn-nic" {
-  name                = "learn-nic"
-  location            = azurerm_resource_group.learn-rg.location
-  resource_group_name = azurerm_resource_group.learn-rg.name
+# VM Instance + Jenkins ===================
+resource "google_compute_instance" "trustnote_vm" {
+  name = "trustnote-vm"
+  machine_type = "e2-micro" # 0.25 vCPU, 1 GB RAM
+  zone = "${var.gcp_zone}"
 
-  ip_configuration {
-    name                          = "internal"
-    subnet_id                     = azurerm_subnet.learn-subnet.id
-    private_ip_address_allocation = "Dynamic"
-    public_ip_address_id = azurerm_public_ip.learn-ip.id
+  boot_disk {
+    initialize_params {
+      image = "debian-cloud/debian-12"
+      size = 10 # Out of 250 GB quota
+      type = "pd-standard"
+    }
   }
 
-   tags = {
-    environment = "dev"
+  network_interface {
+    network = google_compute_network.trustnote_vpc.name
+    access_config {} # Allocates an external public IP
   }
+
+# Install and Start Jenkins after VM creation
+  metadata_startup_script = <<-EOT
+    #!/bin/bash
+    apt-get update -y
+    apt-get install -y openjdk-17-jdk wget gnupg
+    wget -q -O - https://pkg.jenkins.io/debian-stable/jenkins.io.key | tee \
+      /usr/share/keyrings/jenkins-keyring.asc > /dev/null
+    echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] \
+      https://pkg.jenkins.io/debian-stable binary/ | tee \
+      /etc/apt/sources.list.d/jenkins.list > /dev/null
+    apt-get update -y
+    apt-get install -y jenkins
+    systemctl enable jenkins
+    systemctl start jenkins
+  EOT
+
 }
 
-resource "azurerm_linux_virtual_machine" "learn-vm" {
-  name                = "learn-vm"
-  resource_group_name = azurerm_resource_group.learn-rg.name
-  location            = azurerm_resource_group.learn-rg.location
-  size                = "Standard_F2"
-  admin_username      = "adminuser"
-  network_interface_ids = [
-    azurerm_network_interface.learn-nic.id,
-  ]
+# Setup GKE Cluster ===================
+resource "google_container_cluster" "trustnote_gke" {
+    name = "trustnote-gke"
+    location = var.gcp_region
 
-  custom_data = filebase64("customdata.tpl")
+    networking_mode = "VPC_NATIVE"
+    network = google_compute_network.trustnote_vpc.name
 
-  admin_ssh_key {
-    username   = "adminuser"
-    public_key = file("~/.ssh/learnazurekey.pub")
-  }
-
-  os_disk {
-    caching              = "ReadWrite"
-    storage_account_type = "Standard_LRS"
-  }
-
-  source_image_reference {
-    publisher = "Canonical"
-    offer     = "0001-com-ubuntu-server-focal"
-    sku       = "20_04-lts"
-    version   = "latest"
-  }
-
-  provisioner "local-exec" {
-    command = templatefile("${var.host_os}-ssh-script.tpl", {
-      hostname = self.public_ip_address
-      user = "adminuser"
-      identityfile = "~/.ssh/learnazurekey"
-    })
-    interpreter = var.host_os == "linux" ? ["bash", "-c"] : ["Powershell", "-Command"]
-  }
-
-   tags = {
-    environment = "dev"
-  }
+    remove_default_node_pool = true
+    initial_node_count = 1
 }
 
-data "azure_public_ip" "learn-ip-data"{
-  name = azure_public_ip.learn-ip.name
-  resource_group_name = azurerm_resource_group.learn-rg.name
-}
+resource "google_container_node_pool" "trustnote_primary_nodes" {
+  name = "trustnote-default-pool"
+  cluster = google_container_cluster.trustnote_gke.name
+  location = var.gcp_region
 
-output public_ip_address {
-  value       = "${azurerm_linux_virtual_machine.learn-vm.name}: ${data.azure_public_ip.learn-ip.data.ip_address}"
-  sensitive   = false
-  description = "showcase public ip"
+# Assigns each worker node size
+  node_config {
+    machine_type = "e2-micro" # 0.25 vCPU, 1 GB RAM
+    disk_size_gb = 10
+    disk_type = "pd-standard" # HDD - "pd-ssd"
+    oauth_scopes = [
+        "https://www.googleapis.com/auth/cloud-platform"
+    ]
+  }
+
+# Number of worker nodes
+  initial_node_count = 2
 }

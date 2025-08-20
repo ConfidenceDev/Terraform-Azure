@@ -1,0 +1,84 @@
+# Provider and Resource
+# Key Vault
+# VM, Network and SubNets
+
+resource "google_storage_bucket" "plain_website" {
+  name          = "learngcpwk-website"
+  location      = "EU"
+
+  uniform_bucket_level_access = true   # modern best practice
+  website {
+    main_page_suffix = "index.html"
+  }
+}
+
+resource "google_storage_bucket_object" "static_site_src" {
+  name   = "index.html"
+  source = "./website/index.html"
+  bucket = google_storage_bucket.plain_website.name
+  content_type = "text/html"
+}
+
+# Grant public read access using IAM instead of ACLs
+resource "google_storage_bucket_iam_member" "public_rule" {
+  bucket = google_storage_bucket.plain_website.name
+  role   = "roles/storage.objectViewer"
+  member = "allUsers"
+}
+
+# To reserve an external IP
+resource "google_compute_global_address" "plain_website"{
+  provider = google
+  name = "website-lb-ip"
+}
+
+# Serve the bucket to CDN 
+resource "google_compute_backend_bucket" "site_backend" {
+  provider = google
+  name = "site-backend"
+  description = "Contains files needed by the static site"
+  bucket_name = google_storage_bucket.plain_website.name
+  enable_cdn = true
+}
+
+# Create HTTPS certificate
+# resource "google_compute_managed_ssl_certificate" "site_ssl" {
+#   provider = google-beta
+#   name = "site-cert"
+#   managed {
+#     domains = [google_dns_record_set.site_dns.name]
+#   }
+# }
+
+# URL MAP - Load balancer
+resource "google_compute_url_map" "site_url_map" {
+  provider = google
+  name = "site-url-map"
+  default_service = google_compute_backend_bucket.site_backend.self_link
+  host_rule {
+    hosts = ["*"]
+    path_matcher = "allpaths"
+  }
+  path_matcher {
+    name = "allpaths"
+    default_service = google_compute_backend_bucket.site_backend.self_link
+  }
+}
+
+# Target Proxy - Load balancer
+resource "google_compute_target_http_proxy" "site_lb" {
+  provider = google
+  name = "site-target-proxy"
+  url_map = google_compute_url_map.site_url_map.self_link
+}
+
+# Load balancer forwarding rule
+resource "google_compute_global_forwarding_rule" "default" {
+  provider = google
+  name = "site-forwarding-rule"
+  load_balancing_scheme = "EXTERNAL"
+  ip_address = google_compute_global_address.plain_website.address
+  ip_protocol = "TCP"
+  port_range = "80"
+  target = google_compute_target_http_proxy.site_lb.self_link
+}
