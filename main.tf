@@ -49,9 +49,9 @@ resource "google_compute_instance" "trustnote_vm" {
 
   boot_disk {
     initialize_params {
-      image = "debian-cloud/debian-12"
+      image = "debian-cloud/debian-12" #ubuntu-minimal-2404-lts-amd64
       size = 10 # Out of 250 GB quota
-      type = "pd-standard"
+      type = "pd-ssd" #pd-standard
     }
   }
 
@@ -60,21 +60,62 @@ resource "google_compute_instance" "trustnote_vm" {
     access_config {} # Allocates an external public IP
   }
 
-# Install and Start Jenkins after VM creation
-  metadata_startup_script = <<-EOT
-    #!/bin/bash
-    apt-get update -y
-    apt-get install -y openjdk-17-jdk wget gnupg
-    wget -q -O - https://pkg.jenkins.io/debian-stable/jenkins.io.key | tee \
-      /usr/share/keyrings/jenkins-keyring.asc > /dev/null
-    echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] \
-      https://pkg.jenkins.io/debian-stable binary/ | tee \
-      /etc/apt/sources.list.d/jenkins.list > /dev/null
-    apt-get update -y
-    apt-get install -y jenkins
-    systemctl enable jenkins
-    systemctl start jenkins
-  EOT
+  # Install Jenkins, Git, and kubectl after VM creation
+  #  metadata_startup_script = <<-EOT
+  #   #!/bin/bash
+  #   sudo apt-get update -y
+  #   sudo apt-get install -y openjdk-17-jdk wget gnupg git kubectl
+  #   sudo wget -O /etc/apt/keyrings/jenkins-keyring.asc \
+  #     https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
+  #   echo "deb [signed-by=/etc/apt/keyrings/jenkins-keyring.asc]" \
+  #     https://pkg.jenkins.io/debian-stable binary/ | sudo tee \
+  #     /etc/apt/sources.list.d/jenkins.list > /dev/null
+  #   sudo apt-get update -y
+  #   sudo apt-get install jenkins
+  # EOT
+    metadata_startup_script = <<-EOT
+      #!/bin/bash
+      set -eux
+      export DEBIAN_FRONTEND=noninteractive
+
+      # Wait until dpkg/apt is free
+      while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+        echo "Another apt/dpkg process is running. Waiting..."
+        sleep 10
+      done
+
+      # Base tools
+      sudo apt-get update -y
+      sudo apt-get install -y openjdk-17-jdk wget gnupg git apt-transport-https ca-certificates lsb-release curl
+
+      # Install kubectl (latest stable)
+      sudo curl -fsSLo /usr/share/keyrings/kubernetes-archive-keyring.gpg https://packages.cloud.google.com/apt/doc/apt-key.gpg
+      echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main" \
+        | sudo tee /etc/apt/sources.list.d/kubernetes.list
+      sudo apt-get update -y
+      sudo apt-get install -y kubectl
+
+      # Jenkins repo key + list
+      sudo mkdir -p /etc/apt/keyrings
+      sudo wget -O /etc/apt/keyrings/jenkins-keyring.asc https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
+      echo "deb [signed-by=/etc/apt/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" \
+        | sudo tee /etc/apt/sources.list.d/jenkins.list > /dev/null
+
+      # Wait again in case another apt runs
+      while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
+        echo "Waiting for apt lock before installing Jenkins..."
+        sleep 10
+      done
+
+      # Install Jenkins
+      sudo apt-get update -y
+      sudo apt-get install -y jenkins
+
+      # Enable + start Jenkins
+      sudo systemctl daemon-reload
+      sudo systemctl enable jenkins
+      sudo systemctl start jenkins
+    EOT
 
 }
 
@@ -90,6 +131,7 @@ resource "google_container_cluster" "trustnote_gke" {
     # initial_node_count = 1
     enable_autopilot = true
     network          = google_compute_network.trustnote_vpc.name
+    deletion_protection = false
 }
 
 # resource "google_container_node_pool" "trustnote_primary_nodes" {

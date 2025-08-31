@@ -1,10 +1,18 @@
-variable "gcp_svc_key" {}
+variable "gcp_svc_key" {
+    description = "Project service account key"
+}
 
-variable "gcp_project" {}
+variable "gcp_project" {
+    description = "Project name"
+}
 
-variable "gcp_region" {}
+variable "gcp_region" {
+    description = "Project region"
+}
 
-variable "gcp_zone" {}
+variable "gcp_zone" {
+    description = "Project zone"
+}
 
 variable "k8s_secrets" {
     default = {

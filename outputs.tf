@@ -8,6 +8,6 @@ output "trustnote_gke_endpoint" {
 
 output "secrets" {
   value = { 
-    for k, s in google_secret_manager_secret.trustnote_res : k => s.id 
+    for key, secret in google_secret_manager_secret.trustnote_res : key => secret.id 
   }
 }
