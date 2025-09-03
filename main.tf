@@ -1,6 +1,26 @@
-# Provider and Resource
-# Key Vault
-# VM, Network and SubNets
+###############################################################################
+# Terraform configuration for Trustnote infrastructure on Google Cloud Platform
+#
+# Components:
+# - Google Secret Manager: Creates secrets and secret versions for storing K8S environment variables.
+# - Networking: Provisions a VPC network and firewall rules to allow SSH, HTTP, and Jenkins access.
+# - Compute Instance: Deploys a VM with Debian 12, installs Jenkins, Git, and kubectl via startup script.
+# - GKE Cluster: Creates an Autopilot Kubernetes cluster connected to the VPC.
+#
+# Resources:
+# - google_secret_manager_secret: Manages secrets for K8S environment variables.
+# - google_secret_manager_secret_version: Stores secret values for each secret.
+# - google_compute_network: Creates a VPC network for all resources.
+# - google_compute_firewall: Configures firewall rules for SSH (22), HTTP (80), and Jenkins (8080).
+# - google_compute_instance: Provisions a VM and installs required software for CI/CD.
+# - google_container_cluster: Deploys a GKE Autopilot cluster for Kubernetes workloads.
+#
+# Notes:
+# - VM startup script installs Jenkins, Git, kubectl, and Java.
+# - Firewall allows access from any IP address (0.0.0.0/0).
+# - GKE cluster uses Autopilot mode for simplified management.
+# - Node pool resource is commented out; Autopilot manages nodes automatically.
+###############################################################################
 
 # Secret Manager - To store all required K8S env ===================
 resource "google_secret_manager_secret" "trustnote_res" {
@@ -61,61 +81,46 @@ resource "google_compute_instance" "trustnote_vm" {
   }
 
   # Install Jenkins, Git, and kubectl after VM creation
-  #  metadata_startup_script = <<-EOT
-  #   #!/bin/bash
-  #   sudo apt-get update -y
-  #   sudo apt-get install -y openjdk-17-jdk wget gnupg git kubectl
-  #   sudo wget -O /etc/apt/keyrings/jenkins-keyring.asc \
-  #     https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
-  #   echo "deb [signed-by=/etc/apt/keyrings/jenkins-keyring.asc]" \
-  #     https://pkg.jenkins.io/debian-stable binary/ | sudo tee \
-  #     /etc/apt/sources.list.d/jenkins.list > /dev/null
-  #   sudo apt-get update -y
-  #   sudo apt-get install jenkins
-  # EOT
-    metadata_startup_script = <<-EOT
-      #!/bin/bash
-      set -eux
-      export DEBIAN_FRONTEND=noninteractive
+  metadata_startup_script = <<-EOT
+    #!/bin/bash
+    set -euxo pipefail
 
-      # Wait until dpkg/apt is free
-      while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-        echo "Another apt/dpkg process is running. Waiting..."
-        sleep 10
-      done
+    exec > >(tee /var/log/startup-script.log|logger -t startup-script) 2>&1
 
-      # Base tools
-      sudo apt-get update -y
-      sudo apt-get install -y openjdk-17-jdk wget gnupg git apt-transport-https ca-certificates lsb-release curl
+    export DEBIAN_FRONTEND=noninteractive
 
-      # Install kubectl (latest stable)
-      sudo curl -fsSLo /usr/share/keyrings/kubernetes-archive-keyring.gpg https://packages.cloud.google.com/apt/doc/apt-key.gpg
-      echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main" \
-        | sudo tee /etc/apt/sources.list.d/kubernetes.list
-      sudo apt-get update -y
-      sudo apt-get install -y kubectl
+    # Initial update
+    apt-get update -y
+    apt-get install -y curl git apt-transport-https ca-certificates gnupg lsb-release
 
-      # Jenkins repo key + list
-      sudo mkdir -p /etc/apt/keyrings
-      sudo wget -O /etc/apt/keyrings/jenkins-keyring.asc https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
-      echo "deb [signed-by=/etc/apt/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" \
-        | sudo tee /etc/apt/sources.list.d/jenkins.list > /dev/null
+    # Install kubectl (correct repo for Debian 12)
+    mkdir -p /etc/apt/keyrings
+    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+    echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /" \
+      | tee /etc/apt/sources.list.d/kubernetes.list
+    apt-get update -y
+    apt-get install -y kubectl
 
-      # Wait again in case another apt runs
-      while sudo fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1; do
-        echo "Waiting for apt lock before installing Jenkins..."
-        sleep 10
-      done
+    # Install Java (required for Jenkins)
+    apt-get install -y openjdk-17-jdk
 
-      # Install Jenkins
-      sudo apt-get update -y
-      sudo apt-get install -y jenkins
+    # Install Jenkins
+    curl -fsSL https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key | tee \
+      /usr/share/keyrings/jenkins-keyring.asc > /dev/null
+    echo "deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] https://pkg.jenkins.io/debian-stable binary/" \
+      | tee /etc/apt/sources.list.d/jenkins.list > /dev/null
+    apt-get update -y
+    apt-get install -y jenkins
 
-      # Enable + start Jenkins
-      sudo systemctl daemon-reload
-      sudo systemctl enable jenkins
-      sudo systemctl start jenkins
-    EOT
+    # Start Jenkins
+    systemctl enable jenkins
+    systemctl start jenkins
+
+    # Verify installations
+    kubectl version --client || true
+    jenkins --version || true
+    
+  EOT
 
 }
 
