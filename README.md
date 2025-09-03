@@ -6,6 +6,6 @@ Getting started with terraform - Basics
 
 For inquires, support, bug reports and suggestions send me a mail@: confidostic3@gmail.com
 
-- Facebook: Confidence Eze
-- Twitter: @ConfidenceDev
+- Facebook: Confidence Dev
+- Twitter: @confidencedev
 - Instagram: @confidence.dev
